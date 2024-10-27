@@ -1,0 +1,14 @@
+[project]
+name = "requests-winhttp-adapter"
+version = "0.1.0"
+description = "Requests WinHttp Adapter"
+readme = "README.md"
+authors = [
+    { name = "Yukihiro Nakadaira", email = "yukihiro.nakadaira@gmail.com" } 
+]
+requires-python = ">=3.9"
+dependencies = ["requests", "win32more"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
