@@ -1,0 +1,1 @@
+# requests_winhttp_adapter
