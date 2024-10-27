@@ -1,5 +1,6 @@
 import gzip
 import io
+import weakref
 import zlib
 
 import requests
@@ -44,21 +45,19 @@ from win32more.Windows.Win32.System.Variant import (
 CoIncrementMTAUsage(VoidPtr())
 
 
-class RAII:
-    def __new__(cls, obj, free):
-        self = super().__new__(cls)
-        self._obj = obj
-        self._free = free
-        obj._raii = self
-        return obj
-
-    def __del__(self):
-        if self._obj:
-            self._free(self._obj)
+# DIRTYHACK: depends on from_buffer() implementation detail.
+# obj does not refer shared_obj.
+# shared_obj refer obj as shared_obj._objects.obj.
+def Own(obj, callback, ctype=None):
+    if ctype is None:
+        ctype = type(obj)
+    shared_obj = ctype.from_buffer(obj)
+    weakref.finalize(shared_obj, callback, obj)
+    return shared_obj
 
 
 def _bstr(s: str) -> BSTR:
-    return RAII(BSTR(SysAllocStringLen(s, len(s), _as_intptr=True)), SysFreeString)
+    return Own(BSTR(SysAllocStringLen(s, len(s), _as_intptr=True)), SysFreeString)
 
 
 class WinHttpAdapter(requests.adapters.BaseAdapter):
@@ -105,7 +104,7 @@ class WinHttpAdapter(requests.adapters.BaseAdapter):
         if isinstance(body, str):
             body = body.encode("utf-8")
 
-        v = RAII(VARIANT(vt=VT_ARRAY | VT_UI1, parray=SafeArrayCreateVector(VT_UI1, 0, len(body))), VariantClear)
+        v = Own(VARIANT(vt=VT_ARRAY | VT_UI1, parray=SafeArrayCreateVector(VT_UI1, 0, len(body))), VariantClear)
         if v.parray is None:
             raise WinError()
 
@@ -131,14 +130,14 @@ class WinHttpAdapter(requests.adapters.BaseAdapter):
         return status.value
 
     def _get_status_text(self, req: IWinHttpRequest) -> str:
-        status_text = RAII(BSTR(), SysFreeString)
+        status_text = Own(BSTR(), SysFreeString)
         hr = req.get_StatusText(status_text)
         if FAILED(hr):
             raise WinError(hr)
         return status_text.value
 
     def _get_headers(self, req: IWinHttpRequest) -> dict[str, str]:
-        lines = RAII(BSTR(), SysFreeString)
+        lines = Own(BSTR(), SysFreeString)
         hr = req.GetAllResponseHeaders(lines)
         if FAILED(hr):
             raise WinError(hr)
