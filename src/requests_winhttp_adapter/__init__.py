@@ -45,19 +45,31 @@ from win32more.Windows.Win32.System.Variant import (
 CoIncrementMTAUsage(VoidPtr())
 
 
-# DIRTYHACK: depends on from_buffer() implementation detail.
-# obj does not refer shared_obj.
-# shared_obj refer obj as shared_obj._objects.obj.
-def Own(obj, callback, ctype=None):
-    if ctype is None:
-        ctype = type(obj)
+# x = RAII(SysAllocString("str", _as_ctype=True), SysFreeString)
+#
+# y = HSTRING()
+# WindowsCreateString("str", len("str"), RAII(y, WindowsDeleteString))
+def RAII(obj, callback=None):
+    ctype = type(obj)
+    if callback is None:
+        callback = _raii_find_free_function(ctype)
     shared_obj = ctype.from_buffer(obj)
-    weakref.finalize(shared_obj, callback, obj)
+    weakref.finalize(shared_obj, _raii_wrapper, obj, callback, ctype)
     return shared_obj
 
 
+# wrapper to use obj value in finalizer without circular reference.
+def _raii_wrapper(obj, callback, ctype):
+    if obj:
+        weakref.finalize(obj, callback, ctype.from_buffer_copy(obj))
+
+
+def _raii_find_free_function(ctype):
+    raise NotImplementedError(f"There is no pre-defined free function for {ctype}")
+
+
 def _bstr(s: str) -> BSTR:
-    return Own(BSTR(SysAllocStringLen(s, len(s), _as_intptr=True)), SysFreeString)
+    return RAII(BSTR(SysAllocStringLen(s, len(s), _as_intptr=True)), SysFreeString)
 
 
 class WinHttpAdapter(requests.adapters.BaseAdapter):
@@ -78,9 +90,9 @@ class WinHttpAdapter(requests.adapters.BaseAdapter):
         pass
 
     def _send_request(self, request) -> IWinHttpRequest:
-        req = IWinHttpRequest(own=True)
+        req = IWinHttpRequest()
 
-        hr = CoCreateInstance(WinHttpRequest, None, CLSCTX_INPROC_SERVER, IWinHttpRequest._iid_, req)
+        hr = CoCreateInstance(WinHttpRequest, None, CLSCTX_INPROC_SERVER, IWinHttpRequest._iid_, RAII(req, IWinHttpRequest.Release))
         if FAILED(hr):
             raise WinError(hr)
 
@@ -104,7 +116,7 @@ class WinHttpAdapter(requests.adapters.BaseAdapter):
         if isinstance(body, str):
             body = body.encode("utf-8")
 
-        v = Own(VARIANT(vt=VT_ARRAY | VT_UI1, parray=SafeArrayCreateVector(VT_UI1, 0, len(body))), VariantClear)
+        v = RAII(VARIANT(vt=VT_ARRAY | VT_UI1, parray=SafeArrayCreateVector(VT_UI1, 0, len(body))), VariantClear)
         if v.parray is None:
             raise WinError()
 
@@ -130,14 +142,14 @@ class WinHttpAdapter(requests.adapters.BaseAdapter):
         return status.value
 
     def _get_status_text(self, req: IWinHttpRequest) -> str:
-        status_text = Own(BSTR(), SysFreeString)
+        status_text = RAII(BSTR(), SysFreeString)
         hr = req.get_StatusText(status_text)
         if FAILED(hr):
             raise WinError(hr)
         return status_text.value
 
     def _get_headers(self, req: IWinHttpRequest) -> dict[str, str]:
-        lines = Own(BSTR(), SysFreeString)
+        lines = RAII(BSTR(), SysFreeString)
         hr = req.GetAllResponseHeaders(lines)
         if FAILED(hr):
             raise WinError(hr)
