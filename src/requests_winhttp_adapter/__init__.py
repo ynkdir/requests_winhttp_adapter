@@ -9,6 +9,7 @@ from win32more import (
     FAILED,
     POINTER,
     Byte,
+    ComPtr,
     Int32,
     VoidPtr,
     WinError,
@@ -45,7 +46,7 @@ from win32more.Windows.Win32.System.Variant import (
 CoIncrementMTAUsage(VoidPtr())
 
 
-# x = RAII(SysAllocString("str", _as_ctype=True), SysFreeString)
+# x = RAII(BSTR(SysAllocString("str", _as_intptr=True)), SysFreeString)
 #
 # y = HSTRING()
 # WindowsCreateString("str", len("str"), RAII(y, WindowsDeleteString))
@@ -65,6 +66,8 @@ def _raii_wrapper(obj, callback, ctype):
 
 
 def _raii_find_free_function(ctype):
+    if issubclass(ctype, ComPtr):
+        return ctype.Release
     raise NotImplementedError(f"There is no pre-defined free function for {ctype}")
 
 
@@ -92,7 +95,7 @@ class WinHttpAdapter(requests.adapters.BaseAdapter):
     def _send_request(self, request) -> IWinHttpRequest:
         req = IWinHttpRequest()
 
-        hr = CoCreateInstance(WinHttpRequest, None, CLSCTX_INPROC_SERVER, IWinHttpRequest._iid_, RAII(req, IWinHttpRequest.Release))
+        hr = CoCreateInstance(WinHttpRequest, None, CLSCTX_INPROC_SERVER, IWinHttpRequest._iid_, RAII(req))
         if FAILED(hr):
             raise WinError(hr)
 
@@ -142,15 +145,15 @@ class WinHttpAdapter(requests.adapters.BaseAdapter):
         return status.value
 
     def _get_status_text(self, req: IWinHttpRequest) -> str:
-        status_text = RAII(BSTR(), SysFreeString)
-        hr = req.get_StatusText(status_text)
+        status_text = BSTR()
+        hr = req.get_StatusText(RAII(status_text, SysFreeString))
         if FAILED(hr):
             raise WinError(hr)
         return status_text.value
 
     def _get_headers(self, req: IWinHttpRequest) -> dict[str, str]:
-        lines = RAII(BSTR(), SysFreeString)
-        hr = req.GetAllResponseHeaders(lines)
+        lines = BSTR()
+        hr = req.GetAllResponseHeaders(RAII(lines, SysFreeString))
         if FAILED(hr):
             raise WinError(hr)
         headers = CaseInsensitiveDict()
